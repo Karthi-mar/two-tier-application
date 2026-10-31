@@ -1,0 +1,205 @@
+### 1. GCP VM Management (Windows PowerShell)
+
+Start the VM: `gcloud compute instances start two-tier-vm --zone=us-central1-a`
+
+Check VM status: `gcloud compute instances list --filter="name=two-tier-vm"`
+
+Connect through SSH: `gcloud compute ssh two-tier-vm --zone=us-central1-a`
+
+Stop the VM to reduce compute costs when you're not working: `gcloud compute instances stop two-tier-vm --zone=us-central1-a`
+
+### 2. Check the Linux VM (Ubuntu)
+
+Check the current user: `whoami`
+
+Check the hostname: `hostname`
+
+Check the operating system: `cat /etc/os-release`
+
+Update package lists: `sudo apt update`
+
+Install Docker: `sudo apt install -y docker.io`
+
+Start Docker and enable it at boot: `sudo systemctl enable --now docker`
+
+Check Docker service status: `sudo systemctl status docker --no-pager`
+
+Add your user to the Docker group: `sudo usermod -aG docker $USER`
+
+Apply the new group membership in the current terminal: `newgrp docker`
+
+Test Docker: `docker run hello-world`
+
+*Note: Our Docker commands have mainly been run on your Windows PC, so these Linux commands apply to the GCP VM.*
+
+### 3. Docker Commands (Windows PowerShell)
+
+Check the Docker version: `docker --version`
+
+List running containers: `docker ps`
+
+List all containers, including stopped ones: `docker ps -a`
+
+List available images: `docker images`
+
+Build or rebuild the application image from the Dockerfile: `docker build -t two-tier-app:dev .`
+
+Run the container in the background and map port 5000: `docker run -d --name two-tier-container -p 5000:5000 two-tier-app:dev`
+
+View container logs: `docker logs two-tier-container`
+
+Stop the container: `docker stop two-tier-container`
+
+Remove the container: `docker rm two-tier-container`
+
+Force-remove a container when replacing it: `docker rm -f two-tier-container` *(Use carefully; container-local data may be lost.)*
+
+Open the Flask application locally: `http://localhost:5000`
+
+### 4. Git and GitHub (Windows PowerShell)
+
+Check working-tree changes: `git status`
+
+Stage all changes: `git add .` *(Check for secrets and unwanted files first.)*
+
+Commit changes: `git commit -m "Describe your changes"`
+
+Push commits to GitHub: `git push`
+
+Set the upstream branch on the first push if needed: `git push -u origin main`
+
+### 5. Our Current Development Workflow
+
+Whenever you change `app.py`, `requirements.txt`, or the Dockerfile, rebuild the image using `docker build -t two-tier-app:dev .`. If an old container is running, stop and remove it, then run a new container using the updated image. Check the logs with `docker logs two-tier-container` to confirm that the application starts correctly.
+
+**Important:** Your Windows PC and GCP VM are separate environments. Docker images and containers on your PC do not automatically appear on the VM. Later, we'll use a container registry and GitHub Actions to automate deployment to GCP.
+
+
+
+
+
+
+Learnt: 
+
+1.On a user-defined Docker bridge network, Docker provides automatic DNS resolution for container names. This allows the Flask container to find the MySQL container using its name.
+On Docker's default bridge network, containers don't get the same automatic name-based DNS resolution by default. You would generally need to use an IP address or configure another way to discover the database.
+
+
+
+Troubleshooting: Flask and MySQL Docker Connection
+
+## 1. Problem
+
+Our Flask application could not connect to the MySQL database running in a separate Docker container.
+
+We encountered two errors:
+
+**Error 1: Hostname resolution failure**
+```text
+Can't connect to MySQL server on 'mysql_db'
+Name or service not known
+```
+
+**Cause:** Docker could not resolve the hostname `mysql_db`. This can happen if the containers are not connected to the same Docker network.
+
+**Error 2: Database access denied**
+```text
+Access denied for user 'admin'@'%' to database 'mydb'
+```
+
+**Cause:** The `mydb` database was missing, and the `admin` user did not have database-specific privileges.
+
+## 2. Troubleshooting Methods
+
+### Step 1: Check MySQL logs
+
+```powershell
+docker logs mysql_db
+```
+
+**Why?** To check whether MySQL started successfully.
+
+**Finding:** The logs confirmed that MySQL 8.4.13 was running and accepting connections on port 3306.
+
+### Step 2: Check existing databases
+
+Inside the MySQL prompt, run:
+
+```sql
+SHOW DATABASES;
+```
+
+**Why?** To check whether the database required by Flask exists.
+
+**Finding:** `mydb` was missing.
+
+### Step 3: Check MySQL users
+
+```sql
+SELECT user, host FROM mysql.user;
+```
+
+**Why?** To check whether the `admin` user exists.
+
+**Finding:** The `admin` user existed with the host pattern `%`.
+
+### Step 4: Check user permissions
+
+```sql
+SHOW GRANTS FOR 'admin'@'%';
+```
+
+**Why?** To check what the user is allowed to do.
+
+**Finding:** The user had only `USAGE`, which does not grant access to database contents.
+
+### Step 5: Check Docker networking
+
+```powershell
+docker network inspect two-tier-network
+```
+
+**Why?** To verify that both `flask_app` and `mysql_db` are connected to the same Docker network.
+
+Docker uses container names to help containers find each other on a shared user-defined network.
+
+## 3. Solution
+
+Run these commands inside the MySQL prompt as the root user:
+
+**Create the missing database:**
+```sql
+CREATE DATABASE mydb;
+```
+
+**Grant the application user access to it:**
+```sql
+GRANT ALL PRIVILEGES ON mydb.* TO 'admin'@'%';
+```
+
+**Verify the changes:**
+```sql
+SHOW DATABASES;
+SHOW GRANTS FOR 'admin'@'%';
+```
+
+Then exit MySQL and restart Flask:
+
+```sql
+EXIT;
+```
+
+```powershell
+docker restart flask_app
+docker logs --tail 50 flask_app
+```
+
+## 4. Important Lessons Learned
+
+- **Docker networking:** Containers need a shared network to communicate using their container names.
+- **Database:** The database specified in Flask's configuration must exist.
+- **Authentication:** The username and password must be correct.
+- **Authorization:** The MySQL user must have permission to access the database.
+- **Docker initialization:** MySQL environment variables such as `MYSQL_DATABASE` initialize a new, empty data directory. Changing them later does not automatically update an already-initialized database.
+
+**Final takeaway:** When troubleshooting a database connection, check the network, confirm MySQL is running, verify the database exists, and check the user's permissions.
